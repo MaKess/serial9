@@ -68,28 +68,7 @@ void Serial9::end()
 
 // Here is where the escape protocol is defined ...
 //
-#define SERIAL9_BIT9 (0x0100) // Mask for the 9th bit
-
-#define SERIAL9_ESCAPE (0xff)
-#define SERIAL9_HIGH (0x01) // The next byte is sent with BIT9 high
-
-#define SERIAL9_8BIT (0x08) // Set the UART to 8 bit mode
-#define SERIAL9_9BIT (0x09) // Set the UART to 9 bit mode (default)
-
-#define SERIAL9_BAUD_300 (0x10)
-#define SERIAL9_BAUD_600 (0x11)
-#define SERIAL9_BAUD_1200 (0x12)
-#define SERIAL9_BAUD_2400 (0x13)
-#define SERIAL9_BAUD_4800 (0x14)
-#define SERIAL9_BAUD_9600 (0x15)
-#define SERIAL9_BAUD_19200 (0x16)
-#define SERIAL9_BAUD_38400 (0x17)
-#define SERIAL9_BAUD_57600 (0x18)
-#define SERIAL9_BAUD_115200 (0x19)
-
-#ifndef SERIAL9_BUFFER_SIZE
-  #define SERIAL9_BUFFER_SIZE (32)
-#endif
+static constexpr uint16_t SERIAL9_BIT9 = bit(0x0100); // Mask for the 9th bit
 
 void Serial9::loop(void)
 {
@@ -126,18 +105,15 @@ void Serial9::loop(void)
     // the end of each of the three conditions, but it's easier to
     // understand if we don't
     //
-    uint16_t rx_data = serial9_read();
+    const uint16_t rx_data = serial9_read();
 
-    if ((bool)(rx_data & SERIAL9_BIT9)) {
+    if (rx_data & SERIAL9_BIT9) {
       Serial.write(SERIAL9_ESCAPE);
       Serial.write(SERIAL9_HIGH);
-      Serial.write((uint8_t)(rx_data & 0xff));
     } else if (SERIAL9_ESCAPE == rx_data) {
       Serial.write(SERIAL9_ESCAPE);
-      Serial.write((uint8_t)(rx_data & 0xff));
-    } else {
-      Serial.write((uint8_t)(rx_data & 0xff));
     }
+    Serial.write(uint8_t{rx_data});
   
   // The UART is NOT ready to send a character, do nothing
 
@@ -151,7 +127,7 @@ void Serial9::loop(void)
 
   } else if (Serial.available() > 0) {
 
-    uint16_t tx_data = Serial.read();
+    const uint16_t tx_data = Serial.read();
 
     switch (tx_state) {
 
@@ -174,64 +150,104 @@ void Serial9::loop(void)
       //
       tx_state = SERIAL9_STATE_IDLE;
 
-      if (SERIAL9_HIGH == tx_data) {
+      switch (tx_data) {
+      case SERIAL9_HIGH:
         tx_state = SERIAL9_STATE_HIGH;
 
-      } else if (SERIAL9_ESCAPE == tx_data) {
+      case SERIAL9_ESCAPE:
         // It's an escaped ESCAPE character, just send it
         _writing = true;
         serial9_talk();
         serial9_write(tx_data);
+        break;
 
-      } else if (SERIAL9_8BIT == tx_data) {
+      case SERIAL9_8BIT:
         serial9_set_8bit_mode();
+        break;
 
-      } else if (SERIAL9_9BIT == tx_data) {
+      case SERIAL9_9BIT:
         serial9_set_9bit_mode();
+        break;
 
-      } else if (SERIAL9_BAUD_300 == tx_data) {
+      case SERIAL9_BAUD_CUSTOM:
+        tx_state = SERIAL9_STATE_CUSTOM_BAUD_1;
+        break;
+
+      case SERIAL9_BAUD_300:
         serial9_set_baud(300);
+        break;
 
-      } else if (SERIAL9_BAUD_600 == tx_data) {
+      case SERIAL9_BAUD_600:
         serial9_set_baud(600);
+        break;
 
-      } else if (SERIAL9_BAUD_1200 == tx_data) {
+      case SERIAL9_BAUD_1200:
         serial9_set_baud(1200);
+        break;
 
-      } else if (SERIAL9_BAUD_2400 == tx_data) {
+      case SERIAL9_BAUD_2400:
         serial9_set_baud(2400);
+        break;
 
-      } else if (SERIAL9_BAUD_4800 == tx_data) {
+      case SERIAL9_BAUD_4800:
         serial9_set_baud(4800);
+        break;
 
-      } else if (SERIAL9_BAUD_9600 == tx_data) {
+      case SERIAL9_BAUD_9600:
         serial9_set_baud(9600);
+        break;
 
-      } else if (SERIAL9_BAUD_19200 == tx_data) {
+      case SERIAL9_BAUD_19200:
         serial9_set_baud(19200);
+        break;
 
-      } else if (SERIAL9_BAUD_38400 == tx_data) {
+      case SERIAL9_BAUD_38400:
         serial9_set_baud(38400);
+        break;
 
-      } else if (SERIAL9_BAUD_57600 == tx_data) {
+      case SERIAL9_BAUD_57600:
         serial9_set_baud(57600);
+        break;
 
-      } else if (SERIAL9_BAUD_115200 == tx_data) {
+      case SERIAL9_BAUD_115200:
         serial9_set_baud(115200);
+        break;
 
-      } else {
+      default:
         // illegal character - ignore it
-//      tx_state = SERIAL9_STATE_IDLE;
+        // tx_state = SERIAL9_STATE_IDLE;
+        DO_NOTHING;
       }
       break;
 
+    case SERIAL9_STATE_CUSTOM_BAUD_1:
+      custom_baud = uint32_t{tx_data};
+      tx_state = SERIAL9_STATE_CUSTOM_BAUD_2;
+      break;
+
+    case SERIAL9_STATE_CUSTOM_BAUD_2:
+      custom_baud |= uint32_t{tx_data} << 8;
+      tx_state = SERIAL9_STATE_CUSTOM_BAUD_3;
+      break;
+
+    case SERIAL9_STATE_CUSTOM_BAUD_3:
+      custom_baud |= uint32_t{tx_data} << 16;
+      tx_state = SERIAL9_STATE_CUSTOM_BAUD_4;
+      break;
+
+    case SERIAL9_STATE_CUSTOM_BAUD_4:
+      custom_baud |= uint32_t{tx_data} << 24;
+      serial9_set_baud(custom_baud);
+      tx_state = SERIAL9_STATE_IDLE;
+      break;
+
     case SERIAL9_STATE_HIGH:
-        // It's a character that should be sent with the 9th bit high
-        tx_state = SERIAL9_STATE_IDLE;
-        _writing = true;
-        serial9_talk();
-        serial9_write(tx_data | SERIAL9_BIT9);
-        break;
+      // It's a character that should be sent with the 9th bit high
+      tx_state = SERIAL9_STATE_IDLE;
+      _writing = true;
+      serial9_talk();
+      serial9_write(tx_data | SERIAL9_BIT9);
+      break;
 
     default:
        // Weird state when we got this character, ignore it and
