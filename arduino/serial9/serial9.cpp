@@ -45,10 +45,13 @@ extern bool serial9_tx_busy(void);
 extern bool serial9_tx_complete(void);
 extern void serial9_write(uint16_t data);
 
-Serial9::Serial9()
+Serial9::Serial9() :
+  tx_state{SERIAL9_STATE_IDLE},
+  _writing{false},
+  wait_gap{0},
+  wait_gap_tmp{0},
+  last_char_received{0}
 {
-  tx_state = SERIAL9_STATE_IDLE;
-  _writing = false;
 }
 
 Serial9::~Serial9() {}
@@ -56,7 +59,7 @@ Serial9::~Serial9() {}
 void Serial9::begin(uint32_t baud)
 {
   serial9_set_baud(baud);
-  serial9_set_9bit_mode();
+  //serial9_set_9bit_mode();
   serial9_start();
   serial9_listen();
 }
@@ -106,6 +109,16 @@ void Serial9::loop(void)
     // understand if we don't
     //
     const uint16_t rx_data = serial9_read();
+
+    if (wait_gap) {
+      const unsigned long this_char_received = micros();
+      const unsigned long diff_last_char = this_char_received - last_char_received;
+      if (diff_last_char >= wait_gap) {
+        Serial.write(SERIAL9_ESCAPE);
+        Serial.write(SERIAL9_WAIT_GAP_MARKER);
+      }
+      last_char_received = this_char_received;
+    }
 
     if (rx_data & SERIAL9_BIT9) {
       Serial.write(SERIAL9_ESCAPE);
@@ -167,6 +180,10 @@ void Serial9::loop(void)
 
       case SERIAL9_9BIT:
         serial9_set_9bit_mode();
+        break;
+
+      case SERIAL9_WAIT_GAP_SET:
+        tx_state = SERIAL9_STATE_WAIT_GAP_1;
         break;
 
       case SERIAL9_BAUD_CUSTOM:
@@ -238,6 +255,27 @@ void Serial9::loop(void)
     case SERIAL9_STATE_CUSTOM_BAUD_4:
       custom_baud |= uint32_t{tx_data} << 24;
       serial9_set_baud(custom_baud);
+      tx_state = SERIAL9_STATE_IDLE;
+      break;
+
+    case SERIAL9_STATE_WAIT_GAP_1:
+      wait_gap_tmp = uint32_t{tx_data};
+      tx_state = SERIAL9_STATE_WAIT_GAP_2;
+      break;
+
+    case SERIAL9_STATE_WAIT_GAP_2:
+      wait_gap_tmp |= uint32_t{tx_data} << 8;
+      tx_state = SERIAL9_STATE_WAIT_GAP_3;
+      break;
+
+    case SERIAL9_STATE_WAIT_GAP_3:
+      wait_gap_tmp |= uint32_t{tx_data} << 16;
+      tx_state = SERIAL9_STATE_WAIT_GAP_4;
+      break;
+
+    case SERIAL9_STATE_WAIT_GAP_4:
+      wait_gap_tmp |= uint32_t{tx_data} << 24;
+      wait_gap = wait_gap_tmp;
       tx_state = SERIAL9_STATE_IDLE;
       break;
 
